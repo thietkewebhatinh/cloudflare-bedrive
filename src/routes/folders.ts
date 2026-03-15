@@ -1,7 +1,8 @@
-// Folders routes - CRUD for folders
+// Folders routes - CRUD + breadcrumb
 import { Hono } from 'hono'
-import { getSupabaseUserClient } from '../lib/supabase'
-import { authMiddleware } from '../middleware/auth'
+import { getSupabaseUserClient, isDemoMode } from '../lib/supabase'
+import { authMiddleware, DEMO_USER_ID } from '../middleware/auth'
+import { demoStore } from '../lib/mockData'
 
 type Bindings = {
   SUPABASE_URL: string
@@ -9,167 +10,135 @@ type Bindings = {
   SUPABASE_SERVICE_KEY: string
   R2: R2Bucket
   CDN_URL: string
+  APP_URL: string
 }
-
-type Variables = {
-  userId: string
-  userEmail: string
-  userRole: string
-}
+type Variables = { userId: string; userEmail: string; userRole: string; isDemo: boolean }
 
 const folders = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 folders.use('*', authMiddleware)
 
+function isDemo(c: any) { return c.get('isDemo') === true || isDemoMode(c.env) }
+
 function getToken(c: any): string {
   const auth = c.req.header('Authorization')
-  if (auth && auth.startsWith('Bearer ')) return auth.substring(7)
+  if (auth?.startsWith('Bearer ')) return auth.substring(7)
   const cookie = c.req.header('Cookie') || ''
-  const cookies = cookie.split(';').reduce((a: any, v: string) => {
+  return cookie.split(';').reduce((a: any, v: string) => {
     const [k, val] = v.trim().split('=')
     if (k && val) a[k.trim()] = decodeURIComponent(val.trim())
     return a
-  }, {})
-  return cookies['sb_token'] || ''
+  }, {})['sb_token'] || ''
 }
 
-// List folders
+// ── GET /api/folders — list folders ──────────────────────────
 folders.get('/', async (c) => {
-  const userId = c.get('userId')
-  const parentId = c.req.query('parent') || null
-  const token = getToken(c)
-  const supabase = getSupabaseUserClient(c.env, token)
-  
-  let query = supabase
-    .from('folders')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_trashed', false)
-  
-  if (parentId) {
-    query = query.eq('parent_id', parentId)
-  } else {
-    query = query.is('parent_id', null)
+  const parent = c.req.query('parent') || null
+
+  if (isDemo(c)) {
+    return c.json({ folders: demoStore.getFolders(parent) })
   }
-  
-  const { data, error } = await query.order('name', { ascending: true })
+
+  const userId = c.get('userId')
+  const token = getToken(c)
+  const db = getSupabaseUserClient(c.env, token)
+  let q = db.from('folders').select('*').eq('user_id', userId).eq('is_trashed', false)
+  if (parent) q = q.eq('parent_id', parent)
+  else        q = q.is('parent_id', null)
+  const { data, error } = await q.order('name', { ascending: true })
   if (error) return c.json({ error: error.message }, 400)
-  
   return c.json({ folders: data || [] })
 })
 
-// Create folder
-folders.post('/', async (c) => {
+// ── GET /api/folders/breadcrumb/:id ──────────────────────────
+folders.get('/breadcrumb/:id', async (c) => {
+  const id = c.req.param('id')
+
+  if (isDemo(c)) {
+    const path: any[] = []
+    let current = demoStore.getFolder(id)
+    while (current) {
+      path.unshift({ id: current.id, name: current.name })
+      current = current.parent_id ? demoStore.getFolder(current.parent_id) : undefined
+    }
+    return c.json({ path })
+  }
+
   const userId = c.get('userId')
-  const { name, parent_id } = await c.req.json()
   const token = getToken(c)
-  
-  if (!name) return c.json({ error: 'Folder name required' }, 400)
-  
-  const supabase = getSupabaseUserClient(c.env, token)
-  const { data, error } = await supabase
-    .from('folders')
-    .insert({
-      user_id: userId,
-      name,
-      parent_id: parent_id || null,
-    })
-    .select()
-    .single()
-  
-  if (error) return c.json({ error: error.message }, 400)
-  return c.json({ folder: data }, 201)
+  const db = getSupabaseUserClient(c.env, token)
+  const path: any[] = []
+  let currentId: string | null = id
+
+  while (currentId) {
+    const { data } = await db.from('folders').select('id, name, parent_id').eq('id', currentId).eq('user_id', userId).single()
+    if (!data) break
+    path.unshift({ id: data.id, name: data.name })
+    currentId = data.parent_id
+  }
+
+  return c.json({ path })
 })
 
-// Update folder
-folders.patch('/:id', async (c) => {
+// ── POST /api/folders — create folder ─────────────────────────
+folders.post('/', async (c) => {
+  const { name, parent_id } = await c.req.json()
+  if (!name) return c.json({ error: 'Folder name required' }, 400)
+
+  if (isDemo(c)) {
+    const NOW = new Date().toISOString()
+    const folder = demoStore.addFolder({
+      id: demoStore.nextFolderId(),
+      user_id: DEMO_USER_ID,
+      name, parent_id: parent_id || null,
+      is_trashed: false, created_at: NOW, updated_at: NOW,
+    })
+    return c.json({ folder })
+  }
+
   const userId = c.get('userId')
-  const folderId = c.req.param('id')
   const token = getToken(c)
-  const { name, is_starred } = await c.req.json()
-  
-  const supabase = getSupabaseUserClient(c.env, token)
-  const updates: any = { updated_at: new Date().toISOString() }
-  if (name !== undefined) updates.name = name
-  if (is_starred !== undefined) updates.is_starred = is_starred
-  
-  const { data, error } = await supabase
-    .from('folders')
-    .update(updates)
-    .eq('id', folderId)
-    .eq('user_id', userId)
-    .select()
-    .single()
-  
+  const db = getSupabaseUserClient(c.env, token)
+  const { data, error } = await db.from('folders').insert({
+    user_id: userId, name, parent_id: parent_id || null
+  }).select().single()
   if (error) return c.json({ error: error.message }, 400)
   return c.json({ folder: data })
 })
 
-// Delete folder (move to trash)
-folders.delete('/:id', async (c) => {
+// ── PATCH /api/folders/:id — rename ───────────────────────────
+folders.patch('/:id', async (c) => {
+  const id = c.req.param('id')
+  const { name } = await c.req.json()
+  if (!name) return c.json({ error: 'Name required' }, 400)
+
+  if (isDemo(c)) {
+    const updated = demoStore.updateFolder(id, { name, updated_at: new Date().toISOString() })
+    if (!updated) return c.json({ error: 'Not found' }, 404)
+    return c.json({ folder: updated })
+  }
+
   const userId = c.get('userId')
-  const folderId = c.req.param('id')
-  const permanent = c.req.query('permanent') === 'true'
   const token = getToken(c)
-  
-  const supabase = getSupabaseUserClient(c.env, token)
-  
-  if (permanent) {
-    const { error } = await supabase
-      .from('folders')
-      .delete()
-      .eq('id', folderId)
-      .eq('user_id', userId)
-    if (error) return c.json({ error: error.message }, 400)
-    return c.json({ message: 'Folder permanently deleted' })
-  } else {
-    const { error } = await supabase
-      .from('folders')
-      .update({ is_trashed: true, trashed_at: new Date().toISOString() })
-      .eq('id', folderId)
-      .eq('user_id', userId)
-    if (error) return c.json({ error: error.message }, 400)
+  const db = getSupabaseUserClient(c.env, token)
+  const { data, error } = await db.from('folders').update({ name }).eq('id', id).eq('user_id', userId).select().single()
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json({ folder: data })
+})
+
+// ── DELETE /api/folders/:id — trash ───────────────────────────
+folders.delete('/:id', async (c) => {
+  const id = c.req.param('id')
+
+  if (isDemo(c)) {
+    demoStore.updateFolder(id, { is_trashed: true, updated_at: new Date().toISOString() })
     return c.json({ message: 'Folder moved to trash' })
   }
-})
 
-// Restore folder
-folders.post('/:id/restore', async (c) => {
   const userId = c.get('userId')
-  const folderId = c.req.param('id')
   const token = getToken(c)
-  
-  const supabase = getSupabaseUserClient(c.env, token)
-  const { error } = await supabase
-    .from('folders')
-    .update({ is_trashed: false, trashed_at: null })
-    .eq('id', folderId)
-    .eq('user_id', userId)
-  
-  if (error) return c.json({ error: error.message }, 400)
-  return c.json({ message: 'Folder restored' })
-})
-
-// Get folder contents (folders + files)
-folders.get('/:id/contents', async (c) => {
-  const userId = c.get('userId')
-  const folderId = c.req.param('id')
-  const token = getToken(c)
-  const supabase = getSupabaseUserClient(c.env, token)
-  
-  const [foldersRes, filesRes, folderRes] = await Promise.all([
-    supabase.from('folders').select('*').eq('user_id', userId).eq('parent_id', folderId).eq('is_trashed', false).order('name'),
-    supabase.from('files').select('*').eq('user_id', userId).eq('folder_id', folderId).eq('is_trashed', false).order('created_at', { ascending: false }),
-    supabase.from('folders').select('*').eq('id', folderId).single()
-  ])
-  
-  return c.json({
-    folder: folderRes.data,
-    folders: foldersRes.data || [],
-    files: (filesRes.data || []).map((f: any) => ({
-      ...f,
-      url: `${c.env.CDN_URL || ''}/${f.file_path}`
-    }))
-  })
+  const db = getSupabaseUserClient(c.env, token)
+  await db.from('folders').update({ is_trashed: true }).eq('id', id).eq('user_id', userId)
+  return c.json({ message: 'Folder moved to trash' })
 })
 
 export default folders

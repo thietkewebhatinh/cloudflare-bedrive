@@ -1,6 +1,12 @@
 // Supabase client helper
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
+// Check if Supabase is not configured (placeholder values)
+export function isDemoMode(env: { SUPABASE_URL?: string; SUPABASE_ANON_KEY?: string }): boolean {
+  const url = env.SUPABASE_URL || ''
+  return !url || url.includes('your-project') || url === 'https://your-project.supabase.co' || !url.includes('supabase.co')
+}
+
 export function getSupabaseClient(env: { SUPABASE_URL: string; SUPABASE_ANON_KEY: string }): SupabaseClient {
   return createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
     auth: {

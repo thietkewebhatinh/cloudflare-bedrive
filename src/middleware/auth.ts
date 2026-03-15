@@ -1,6 +1,10 @@
-// Auth middleware - verifies JWT from Supabase
+// Auth middleware - verifies JWT from Supabase or demo mode
 import { createMiddleware } from 'hono/factory'
-import { getSupabaseClient } from '../lib/supabase'
+import { getSupabaseClient, isDemoMode } from '../lib/supabase'
+
+export const DEMO_TOKEN = 'demo-token-bedrive'
+export const DEMO_USER_ID = 'demo-user-001'
+export const DEMO_USER_EMAIL = 'demo@bedrive.app'
 
 type Env = {
   Bindings: {
@@ -12,50 +16,65 @@ type Env = {
     userId: string
     userEmail: string
     userRole: string
+    isDemo: boolean
   }
 }
 
-export const authMiddleware = createMiddleware<Env>(async (c, next) => {
+function extractToken(c: any): string | null {
   const authHeader = c.req.header('Authorization')
   const cookieHeader = c.req.header('Cookie')
-  
-  let token: string | null = null
-  
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7)
-  } else if (cookieHeader) {
-    // Parse cookie
+  if (authHeader && authHeader.startsWith('Bearer ')) return authHeader.substring(7)
+  if (cookieHeader) {
     const cookies = cookieHeader.split(';').reduce((acc: Record<string, string>, cookie: string) => {
       const [key, val] = cookie.trim().split('=')
       if (key && val) acc[key.trim()] = decodeURIComponent(val.trim())
       return acc
     }, {})
-    token = cookies['sb_token'] || null
+    return cookies['sb_token'] || null
   }
-  
+  return null
+}
+
+export const authMiddleware = createMiddleware<Env>(async (c, next) => {
+  const token = extractToken(c)
+
   if (!token) {
     return c.json({ error: 'Unauthorized' }, 401)
   }
-  
-  const supabase = getSupabaseClient(c.env)
-  const { data: { user }, error } = await supabase.auth.getUser(token)
-  
-  if (error || !user) {
-    return c.json({ error: 'Invalid token' }, 401)
+
+  // Demo mode: bypass Supabase entirely
+  if (token === DEMO_TOKEN || isDemoMode(c.env)) {
+    c.set('userId', DEMO_USER_ID)
+    c.set('userEmail', DEMO_USER_EMAIL)
+    c.set('userRole', 'admin')
+    c.set('isDemo', true)
+    await next()
+    return
   }
-  
-  c.set('userId', user.id)
-  c.set('userEmail', user.email || '')
-  
-  // Get user role from profiles
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
-  
-  c.set('userRole', profile?.role || 'user')
-  
+
+  try {
+    const supabase = getSupabaseClient(c.env)
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+
+    if (error || !user) {
+      return c.json({ error: 'Invalid token' }, 401)
+    }
+
+    c.set('userId', user.id)
+    c.set('userEmail', user.email || '')
+    c.set('isDemo', false)
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    c.set('userRole', profile?.role || 'user')
+  } catch (e) {
+    return c.json({ error: 'Auth service unavailable' }, 503)
+  }
+
   await next()
 })
 

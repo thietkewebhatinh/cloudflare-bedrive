@@ -1,0 +1,54 @@
+name: 🚀 Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allow manual trigger (1-click deploy)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy BeDrive
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      # ─── Checkout ───────────────────────────────────────
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      # ─── Node.js ────────────────────────────────────────
+      - name: ⚙️ Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ─── Install ────────────────────────────────────────
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      # ─── Build ──────────────────────────────────────────
+      - name: 🔨 Build project
+        run: npm run build
+
+      # ─── Deploy ─────────────────────────────────────────
+      - name: 🌩️ Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=bedrive --branch=main
+
+      # ─── Summary ────────────────────────────────────────
+      - name: ✅ Deployment summary
+        run: |
+          echo "## 🚀 Deployed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Project** | bedrive |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | main |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | https://bedrive.pages.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Custom Domain** | https://drive.webdep24h.com |" >> $GITHUB_STEP_SUMMARY
