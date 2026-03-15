@@ -11,3 +11,4 @@ logs/
 *.backup
 *.tar.gz
 .pm2/
+.github/
