@@ -8,6 +8,7 @@ import sharesRoutes   from './routes/shares'
 import adminRoutes    from './routes/admin'
 import cdnRoutes      from './routes/cdn'
 import settingsRoutes from './routes/settings'
+import notifRoutes    from './routes/notifications'
 
 type Bindings = {
   SUPABASE_URL: string
@@ -29,13 +30,14 @@ app.use('/api/*', cors({
 }))
 
 // API Routes
-app.route('/api/auth',     authRoutes)
-app.route('/api/files',    filesRoutes)
-app.route('/api/folders',  foldersRoutes)
-app.route('/api/shares',   sharesRoutes)
-app.route('/api/admin',    adminRoutes)
-app.route('/api/settings', settingsRoutes)
-app.route('/r2',           cdnRoutes)
+app.route('/api/auth',          authRoutes)
+app.route('/api/files',         filesRoutes)
+app.route('/api/folders',       foldersRoutes)
+app.route('/api/shares',        sharesRoutes)
+app.route('/api/admin',         adminRoutes)
+app.route('/api/settings',      settingsRoutes)
+app.route('/api/notifications', notifRoutes)
+app.route('/r2',                cdnRoutes)
 
 // Static assets
 app.use('/static/*', serveStatic({ root: './public' }))
@@ -507,10 +509,27 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0
         </button>
       </div>
 
-      <!-- Notifications -->
-      <button class="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-gray-700 rounded-xl hover:bg-gray-100 transition-colors relative">
-        <i class="fas fa-bell text-sm"></i>
-      </button>
+      <!-- Notifications Bell -->
+      <div class="relative" id="notif-wrapper">
+        <button id="btn-notif-bell" onclick="BeDrive.toggleNotifPanel()" title="Notifications"
+          class="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-gray-700 rounded-xl hover:bg-gray-100 transition-colors relative">
+          <i class="fas fa-bell text-sm"></i>
+          <span id="notif-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 font-bold leading-none">0</span>
+        </button>
+        <!-- Notification dropdown panel -->
+        <div id="notif-panel" class="hidden absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden" style="top:100%">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+            <span class="font-semibold text-gray-800 text-sm">Notifications</span>
+            <button onclick="BeDrive.markAllNotifsRead()" class="text-xs text-blue-600 hover:text-blue-800 font-medium">Mark all read</button>
+          </div>
+          <div id="notif-list" class="overflow-y-auto max-h-80">
+            <div class="p-6 text-center text-gray-400 text-sm">Loading...</div>
+          </div>
+          <div class="border-t border-gray-100 px-4 py-2.5 bg-gray-50">
+            <button onclick="BeDrive.navigate('admin-logs')" class="text-xs text-blue-600 hover:text-blue-800 font-medium w-full text-center">View all activity logs →</button>
+          </div>
+        </div>
+      </div>
 
       <!-- Avatar -->
       <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-bold cursor-pointer ring-2 ring-blue-100 hover:ring-blue-300 transition-all" id="header-avatar">D</div>

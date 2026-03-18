@@ -1,8 +1,9 @@
 // Files routes - upload, list, delete, rename, star, trash
 import { Hono } from 'hono'
-import { getSupabaseUserClient, generateFilePath, getFileCategory, isDemoMode } from '../lib/supabase'
+import { getSupabaseUserClient, getSupabaseServiceClient, generateFilePath, getFileCategory, isDemoMode } from '../lib/supabase'
 import { authMiddleware, DEMO_USER_ID } from '../middleware/auth'
 import { demoStore } from '../lib/mockData'
+import { createNotification } from './notifications'
 
 type Bindings = {
   SUPABASE_URL: string
@@ -172,6 +173,18 @@ files.post('/upload', async (c) => {
 
   if (error) return c.json({ error: error.message }, 400)
   const cdnBase = c.env.CDN_URL || ''
+
+  // Create upload notification (non-blocking)
+  const svc = getSupabaseServiceClient(c.env)
+  svc.from('profiles').select('name,email').eq('id', userId).single().then(({ data: prof }) => {
+    createNotification(c.env, {
+      type: 'upload', title: 'File uploaded',
+      message: `${prof?.name || prof?.email || userId} uploaded "${fileObj.name}" (${(fileObj.size / 1048576).toFixed(1)} MB)`,
+      userId, userName: prof?.name, userEmail: prof?.email,
+      metadata: { file_name: fileObj.name, file_size: fileObj.size }
+    })
+  }).catch(() => {})
+
   return c.json({
     file: { ...data, url: `${cdnBase}/${data.file_path}`, category: getFileCategory(data.mime_type) },
     message: 'Uploaded successfully'

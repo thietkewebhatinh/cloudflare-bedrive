@@ -3,6 +3,13 @@ import { Hono } from 'hono'
 import { getSupabaseServiceClient, getSupabaseClient, getSupabaseUserClient, isDemoMode } from '../lib/supabase'
 import { authMiddleware, adminMiddleware, DEMO_USER_ID, DEMO_TOKEN } from '../middleware/auth'
 import { MOCK_USERS } from '../lib/mockData'
+import { createNotification } from './notifications'
+
+// ── In-memory app settings fallback (used if DB table doesn't exist yet)
+const memorySettings: Record<string, string> = {
+  signup_enabled:    'true',
+  approval_required: 'false',
+}
 
 type Bindings = {
   SUPABASE_URL: string
@@ -20,10 +27,12 @@ const settings = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 settings.use('*', authMiddleware)
 
 // Only admin routes for user management and config
-// /me/* routes skip the admin check
+// /me/* routes skip the admin check (handled per-route)
 settings.use('/users*',         adminMiddleware)
 settings.use('/config',         adminMiddleware)
 settings.use('/storage-stats',  adminMiddleware)
+settings.use('/app-settings*',  adminMiddleware)
+settings.use('/pending-users',  adminMiddleware)
 
 function isDemo(c: any) { return c.get('isDemo') === true || isDemoMode(c.env) }
 function getToken(c: any): string {
@@ -32,26 +41,162 @@ function getToken(c: any): string {
   return ''
 }
 
+// ── App settings helpers ────────────────────────────────────────
+// We store app settings in activity_logs with action='system_config'
+// ip = key identifier, metadata = { key, value }
+async function getAppSetting(svc: any, key: string): Promise<string> {
+  try {
+    const { data } = await svc
+      .from('activity_logs')
+      .select('metadata')
+      .eq('action', 'system_config')
+      .eq('ip', key)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    return data?.metadata?.value ?? memorySettings[key] ?? ''
+  } catch {
+    return memorySettings[key] ?? ''
+  }
+}
+
+async function setAppSetting(svc: any, key: string, value: string): Promise<void> {
+  memorySettings[key] = value
+  try {
+    // Delete old then insert new (upsert-like behavior)
+    await svc.from('activity_logs').delete()
+      .eq('action', 'system_config').eq('ip', key)
+    await svc.from('activity_logs').insert({
+      action: 'system_config',
+      ip: key,
+      metadata: { key, value },
+      user_agent: 'admin',
+    })
+  } catch (_e) {
+    // Non-fatal: memorySettings already updated
+  }
+}
+
+// ── GET /api/settings/app-settings ─────────────────────────────
+settings.get('/app-settings', async (c) => {
+  if (isDemo(c)) {
+    return c.json({
+      signup_enabled:    memorySettings.signup_enabled !== 'false',
+      approval_required: memorySettings.approval_required === 'true',
+    })
+  }
+  try {
+    const svc = getSupabaseServiceClient(c.env)
+    const [su, ar] = await Promise.all([
+      getAppSetting(svc, 'signup_enabled'),
+      getAppSetting(svc, 'approval_required'),
+    ])
+    return c.json({
+      signup_enabled:    su !== 'false',
+      approval_required: ar === 'true',
+    })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ── PATCH /api/settings/app-settings ───────────────────────────
+settings.patch('/app-settings', async (c) => {
+  const body = await c.req.json()
+  if (isDemo(c)) {
+    if (body.signup_enabled    !== undefined) memorySettings.signup_enabled    = String(body.signup_enabled)
+    if (body.approval_required !== undefined) memorySettings.approval_required = String(body.approval_required)
+    return c.json({ ok: true })
+  }
+  try {
+    const svc = getSupabaseServiceClient(c.env)
+    if (body.signup_enabled    !== undefined) await setAppSetting(svc, 'signup_enabled',    String(body.signup_enabled))
+    if (body.approval_required !== undefined) await setAppSetting(svc, 'approval_required', String(body.approval_required))
+    return c.json({ ok: true })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ── GET /api/settings/pending-users ────────────────────────────
+settings.get('/pending-users', async (c) => {
+  if (isDemo(c)) {
+    return c.json({ users: [], total: 0 })
+  }
+  try {
+    const svc = getSupabaseServiceClient(c.env)
+    const { data, error, count } = await svc
+      .from('profiles')
+      .select('*', { count: 'exact' })
+      .eq('role', 'pending')
+      .order('created_at', { ascending: false })
+    if (error) return c.json({ error: error.message }, 400)
+    return c.json({ users: data || [], total: count || 0 })
+  } catch (e: any) {
+    return c.json({ error: 'Service unavailable' }, 503)
+  }
+})
+
+// ── POST /api/settings/users/:id/approve ───────────────────────
+settings.post('/users/:id/approve', async (c) => {
+  const id = c.req.param('id')
+  if (isDemo(c)) return c.json({ message: 'User approved (demo)' })
+  try {
+    const svc = getSupabaseServiceClient(c.env)
+    const { data, error } = await svc
+      .from('profiles')
+      .update({ role: 'user', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) return c.json({ error: error.message }, 400)
+
+    await createNotification(c.env, {
+      type: 'approve', title: 'User approved',
+      message: `${data.name || data.email} has been approved and can now log in`,
+      userId: id, userName: data.name, userEmail: data.email,
+    })
+
+    return c.json({ user: data, message: 'User approved successfully' })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
+// ── POST /api/settings/users/:id/reject ────────────────────────
+settings.post('/users/:id/reject', async (c) => {
+  const id = c.req.param('id')
+  if (isDemo(c)) return c.json({ message: 'User rejected (demo)' })
+  try {
+    const svc = getSupabaseServiceClient(c.env)
+    const { error } = await svc.auth.admin.deleteUser(id)
+    if (error) return c.json({ error: error.message }, 400)
+    return c.json({ message: 'User rejected and removed' })
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500)
+  }
+})
+
 // ──────────────────────────────────────────────────────────────
-// GET /api/settings/config — get app config (connection + app)
+// GET /api/settings/config — app config (connection + app info)
 // ──────────────────────────────────────────────────────────────
 settings.get('/config', async (c) => {
   return c.json({
-    supabase_url: isDemo(c) ? 'https://your-project.supabase.co' : (c.env.SUPABASE_URL || ''),
-    cdn_url: c.env.CDN_URL || '',
-    app_url: c.env.APP_URL || '',
-    app_name: 'BeDrive',
-    app_version: '1.0.0',
-    free_quota_gb: 5,
+    supabase_url:   isDemo(c) ? 'https://your-project.supabase.co' : (c.env.SUPABASE_URL || ''),
+    cdn_url:        c.env.CDN_URL || '',
+    app_url:        c.env.APP_URL || '',
+    app_name:       'BeDrive',
+    app_version:    '1.0.0',
+    free_quota_gb:  5,
     max_file_size_mb: 100,
-    allowed_types: ['image/*', 'video/*', 'audio/*', 'application/pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar', 'text/plain'],
-    r2_bucket: 'bedrive-storage',
-    demo_mode: isDemo(c),
+    allowed_types: ['image/*','video/*','audio/*','application/pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.zip','.rar','text/plain'],
+    r2_bucket:      'bedrive-storage',
+    demo_mode:      isDemo(c),
   })
 })
 
 // ──────────────────────────────────────────────────────────────
-// GET /api/settings/users — list all users (paginated)
+// GET /api/settings/users — list all users (paginated, excludes pending)
 // ──────────────────────────────────────────────────────────────
 settings.get('/users', async (c) => {
   const page   = parseInt(c.req.query('page')   || '1')
@@ -71,12 +216,13 @@ settings.get('/users', async (c) => {
     let q = svc.from('profiles').select('*', { count: 'exact' })
     if (search) q = q.or(`email.ilike.%${search}%,name.ilike.%${search}%`)
     if (role)   q = q.eq('role', role)
+    else        q = q.neq('role', 'pending')   // exclude pending from main users list
     const { data, error, count } = await q
       .order('created_at', { ascending: false })
       .range((page - 1) * limit, page * limit - 1)
     if (error) return c.json({ error: error.message }, 400)
     return c.json({ users: data || [], total: count || 0, page, limit })
-  } catch (e) {
+  } catch (_e) {
     return c.json({ error: 'Service unavailable' }, 503)
   }
 })
@@ -95,13 +241,13 @@ settings.get('/users/:id', async (c) => {
     const { data, error } = await svc.from('profiles').select('*').eq('id', id).single()
     if (error || !data) return c.json({ error: 'User not found' }, 404)
     return c.json({ user: data })
-  } catch (e) {
+  } catch (_e) {
     return c.json({ error: 'Service unavailable' }, 503)
   }
 })
 
 // ──────────────────────────────────────────────────────────────
-// POST /api/settings/users — create new user
+// POST /api/settings/users — create new user (admin)
 // ──────────────────────────────────────────────────────────────
 settings.post('/users', async (c) => {
   const { email, password, name, role, quota } = await c.req.json()
@@ -120,7 +266,6 @@ settings.post('/users', async (c) => {
 
   try {
     const svc = getSupabaseServiceClient(c.env)
-    // Create auth user
     const { data: authUser, error: authErr } = await svc.auth.admin.createUser({
       email, password,
       email_confirm: true,
@@ -128,7 +273,6 @@ settings.post('/users', async (c) => {
     })
     if (authErr) return c.json({ error: authErr.message }, 400)
 
-    // Update profile
     const updates: any = {}
     if (name)  updates.name  = name
     if (role)  updates.role  = role
@@ -145,7 +289,7 @@ settings.post('/users', async (c) => {
 })
 
 // ──────────────────────────────────────────────────────────────
-// PATCH /api/settings/users/:id — update user (name, role, quota, avatar)
+// PATCH /api/settings/users/:id — update user (name, role, quota, email)
 // ──────────────────────────────────────────────────────────────
 settings.patch('/users/:id', async (c) => {
   const id = c.req.param('id')
@@ -169,7 +313,6 @@ settings.patch('/users/:id', async (c) => {
       if (error) return c.json({ error: error.message }, 400)
     }
 
-    // Update email via auth admin API
     if (body.email) {
       const { error } = await svc.auth.admin.updateUserById(id, { email: body.email, email_confirm: true })
       if (error) return c.json({ error: error.message }, 400)
@@ -190,11 +333,7 @@ settings.post('/users/:id/password', async (c) => {
   const id = c.req.param('id')
   const { password } = await c.req.json()
   if (!password || password.length < 6) return c.json({ error: 'Password must be at least 6 characters' }, 400)
-
-  if (isDemo(c)) {
-    return c.json({ message: 'Password updated (demo)' })
-  }
-
+  if (isDemo(c)) return c.json({ message: 'Password updated (demo)' })
   try {
     const svc = getSupabaseServiceClient(c.env)
     const { error } = await svc.auth.admin.updateUserById(id, { password })
@@ -212,12 +351,9 @@ settings.delete('/users/:id', async (c) => {
   const id = c.req.param('id')
   const adminId = c.get('userId')
   if (id === adminId) return c.json({ error: 'Cannot delete your own account' }, 400)
-
   if (isDemo(c)) return c.json({ message: 'User deleted (demo)' })
-
   try {
     const svc = getSupabaseServiceClient(c.env)
-    // Delete auth user (cascade deletes profile + data via FK)
     const { error } = await svc.auth.admin.deleteUser(id)
     if (error) return c.json({ error: error.message }, 400)
     return c.json({ message: 'User and all their data deleted' })
@@ -227,7 +363,7 @@ settings.delete('/users/:id', async (c) => {
 })
 
 // ──────────────────────────────────────────────────────────────
-// POST /api/settings/users/:id/reset-storage — reset used_space
+// POST /api/settings/users/:id/reset-storage
 // ──────────────────────────────────────────────────────────────
 settings.post('/users/:id/reset-storage', async (c) => {
   const id = c.req.param('id')
@@ -247,7 +383,7 @@ settings.post('/users/:id/reset-storage', async (c) => {
 // PATCH /api/settings/me/password — change own password
 // ──────────────────────────────────────────────────────────────
 settings.patch('/me/password', async (c) => {
-  const { current_password, new_password } = await c.req.json()
+  const { new_password } = await c.req.json()
   if (!new_password || new_password.length < 6) return c.json({ error: 'New password must be at least 6 characters' }, 400)
   if (isDemo(c)) return c.json({ message: 'Password updated (demo)' })
   try {

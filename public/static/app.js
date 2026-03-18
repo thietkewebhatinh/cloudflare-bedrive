@@ -16,7 +16,17 @@ const state = {
   searchTimeout: null,
   renameTarget: null,
   shareTarget: null,
-  uploadFiles: []
+  uploadFiles: [],
+  // Notifications
+  notifOpen: false,
+  notifList: [],
+  notifUnread: 0,
+  notifInterval: null,
+  // Settings
+  settingsTab: 'users',
+  settingsUsers: [],
+  settingsPage: 1,
+  settingsSearch: ''
 };
 
 // ─── Auth helpers ─────────────────────────────────────────
@@ -76,6 +86,7 @@ async function init() {
     const data = await res.json();
     state.user = data.user;
     updateUserUI();
+    startNotifPolling();
     navigate('files');
   } catch(e) {
     window.location.href = '/login';
@@ -845,11 +856,6 @@ async function loadAdminLogs() {
 }
 
 // ─── Settings Page ───────────────────────────────────────
-// state for settings
-state.settingsTab = 'users';
-state.settingsUsers = [];
-state.settingsPage  = 1;
-state.settingsSearch = '';
 
 async function loadSettings(tab) {
   state.currentPage = 'settings';
@@ -861,15 +867,17 @@ async function loadSettings(tab) {
   pc.innerHTML = `
   <div class="flex gap-0 min-h-[600px]">
     <!-- Tab sidebar -->
-    <div class="w-48 flex-shrink-0 bg-white border border-gray-200 rounded-l-xl overflow-hidden">
+    <div class="w-52 flex-shrink-0 bg-white border border-gray-200 rounded-l-xl overflow-hidden">
       <div class="px-4 py-3 border-b border-gray-100">
         <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Settings</p>
       </div>
       <nav class="py-2">
-        <div id="stab-users"    class="settings-tab nav-item ${state.settingsTab==='users'    ? 'active':''}" onclick="BeDrive.settingsTab('users')"><i class="fas fa-users text-blue-400"></i> Users</div>
-        <div id="stab-new-user" class="settings-tab nav-item ${state.settingsTab==='new-user' ? 'active':''}" onclick="BeDrive.settingsTab('new-user')"><i class="fas fa-user-plus text-green-500"></i> Add User</div>
-        <div id="stab-config"   class="settings-tab nav-item ${state.settingsTab==='config'   ? 'active':''}" onclick="BeDrive.settingsTab('config')"><i class="fas fa-plug text-purple-500"></i> Connection</div>
-        <div id="stab-mypass"   class="settings-tab nav-item ${state.settingsTab==='mypass'   ? 'active':''}" onclick="BeDrive.settingsTab('mypass')"><i class="fas fa-key text-yellow-500"></i> My Password</div>
+        <div id="stab-users"    class="settings-tab nav-item ${state.settingsTab==='users'       ? 'active':''}" onclick="BeDrive.settingsTab('users')"><i class="fas fa-users text-blue-400"></i> Users</div>
+        <div id="stab-new-user" class="settings-tab nav-item ${state.settingsTab==='new-user'    ? 'active':''}" onclick="BeDrive.settingsTab('new-user')"><i class="fas fa-user-plus text-green-500"></i> Add User</div>
+        <div id="stab-pending"  class="settings-tab nav-item ${state.settingsTab==='pending'     ? 'active':''}" onclick="BeDrive.settingsTab('pending')"><i class="fas fa-user-clock text-orange-500"></i> Pending <span id="pending-count-badge" class="ml-1 bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 hidden">0</span></div>
+        <div id="stab-app"      class="settings-tab nav-item ${state.settingsTab==='app'         ? 'active':''}" onclick="BeDrive.settingsTab('app')"><i class="fas fa-sliders-h text-indigo-500"></i> App Settings</div>
+        <div id="stab-config"   class="settings-tab nav-item ${state.settingsTab==='config'      ? 'active':''}" onclick="BeDrive.settingsTab('config')"><i class="fas fa-plug text-purple-500"></i> Connection</div>
+        <div id="stab-mypass"   class="settings-tab nav-item ${state.settingsTab==='mypass'      ? 'active':''}" onclick="BeDrive.settingsTab('mypass')"><i class="fas fa-key text-yellow-500"></i> My Password</div>
       </nav>
     </div>
     <!-- Content panel -->
@@ -877,6 +885,8 @@ async function loadSettings(tab) {
   </div>`;
 
   renderSettingsTab(state.settingsTab);
+  // Load pending count badge
+  loadPendingCount();
 }
 
 function settingsTabSwitch(tab) {
@@ -885,6 +895,21 @@ function settingsTabSwitch(tab) {
   const active = document.getElementById('stab-' + tab);
   if (active) active.classList.add('active');
   renderSettingsTab(tab);
+}
+
+async function loadPendingCount() {
+  try {
+    const res = await fetch('/api/settings/pending-users', { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const cnt = data.total || 0;
+    const badge = document.getElementById('pending-count-badge');
+    if (badge) {
+      badge.textContent = cnt;
+      if (cnt > 0) badge.classList.remove('hidden');
+      else badge.classList.add('hidden');
+    }
+  } catch(_e) {}
 }
 
 async function renderSettingsTab(tab) {
@@ -925,6 +950,53 @@ async function renderSettingsTab(tab) {
       + '<button onclick="BeDrive.settingsTab(\'users\')" class="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50">Cancel</button>'
       + '<button onclick="BeDrive.settingsCreateUser()" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"><i class="fas fa-user-plus"></i> Create User</button>'
       + '</div></div>';
+    return;
+  }
+
+  if (tab === 'pending') {
+    panel.innerHTML = '<div class="flex items-center justify-between mb-4">'
+      + '<div><h2 class="text-lg font-semibold text-gray-800">Pending Approvals</h2>'
+      + '<p class="text-sm text-gray-400 mt-0.5">Users who registered and are awaiting admin approval</p></div>'
+      + '</div>'
+      + '<div id="pending-table-wrap"><div class="text-center py-10"><i class="fas fa-spinner fa-spin text-orange-500 text-2xl"></i></div></div>';
+    await fetchPendingUsers();
+    return;
+  }
+
+  if (tab === 'app') {
+    panel.innerHTML = '<h2 class="text-lg font-semibold text-gray-800 mb-1">App Settings</h2>'
+      + '<p class="text-sm text-gray-400 mb-5">Control registration and account approval behaviour</p>'
+      + '<div id="app-settings-loading" class="text-center py-10"><i class="fas fa-spinner fa-spin text-indigo-500 text-2xl"></i></div>'
+      + '<div id="app-settings-form" class="hidden max-w-lg space-y-5"></div>';
+    try {
+      const res  = await fetch('/api/settings/app-settings', { headers: authHeaders() });
+      const data = await res.json();
+      document.getElementById('app-settings-loading').classList.add('hidden');
+      const form = document.getElementById('app-settings-form');
+      form.classList.remove('hidden');
+      form.innerHTML =
+        '<div class="bg-white border border-gray-200 rounded-xl p-5 flex items-center justify-between">'
+        + '<div><p class="font-medium text-gray-800">Allow Sign Up</p>'
+        + '<p class="text-sm text-gray-400 mt-0.5">When OFF, the registration page is disabled and new users cannot sign up.</p></div>'
+        + '<label class="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">'
+        + '<input type="checkbox" id="toggle-signup" ' + (data.signup_enabled ? 'checked' : '') + ' onchange="BeDrive.settingsToggle(\'signup_enabled\', this.checked)" class="sr-only peer">'
+        + '<div class="w-11 h-6 bg-gray-300 peer-checked:bg-blue-600 rounded-full transition-colors duration-200 after:content-[\'\'] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>'
+        + '</label></div>'
+
+        + '<div class="bg-white border border-gray-200 rounded-xl p-5 flex items-center justify-between">'
+        + '<div><p class="font-medium text-gray-800">Require Admin Approval</p>'
+        + '<p class="text-sm text-gray-400 mt-0.5">When ON, new registrations are set to <em>pending</em> and must be approved by an admin before the user can log in.</p></div>'
+        + '<label class="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">'
+        + '<input type="checkbox" id="toggle-approval" ' + (data.approval_required ? 'checked' : '') + ' onchange="BeDrive.settingsToggle(\'approval_required\', this.checked)" class="sr-only peer">'
+        + '<div class="w-11 h-6 bg-gray-300 peer-checked:bg-indigo-600 rounded-full transition-colors duration-200 after:content-[\'\'] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>'
+        + '</label></div>'
+
+        + '<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">'
+        + '<i class="fas fa-info-circle mr-1"></i> When <strong>Require Admin Approval</strong> is enabled, go to the <strong>Pending</strong> tab to approve or reject new registrations.'
+        + '</div>';
+    } catch(_e) {
+      document.getElementById('app-settings-loading').innerHTML = '<p class="text-red-500 text-sm">Failed to load app settings</p>';
+    }
     return;
   }
 
@@ -1041,6 +1113,83 @@ function renderUsersTable(wrap, users, total) {
   html += '</tbody></table></div>';
   html += '<p class="text-xs text-gray-400 mt-2 text-right">' + total + ' user(s) total</p>';
   wrap.innerHTML = html;
+}
+
+async function fetchPendingUsers() {
+  const wrap = document.getElementById('pending-table-wrap');
+  if (!wrap) return;
+  try {
+    const res  = await fetch('/api/settings/pending-users', { headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) { wrap.innerHTML = '<p class="text-red-500 text-sm p-4">' + escHtml(data.error || 'Error') + '</p>'; return; }
+    const users = data.users || [];
+    if (!users.length) {
+      wrap.innerHTML = '<div class="text-center py-12"><i class="fas fa-check-circle text-4xl text-green-400 mb-3"></i><p class="text-gray-500 font-medium">No pending approvals</p><p class="text-gray-400 text-sm mt-1">All registrations have been reviewed.</p></div>';
+      return;
+    }
+    let html = '<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">'
+      + '<table class="w-full text-sm">'
+      + '<thead class="bg-orange-50 border-b border-gray-200"><tr>'
+      + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>'
+      + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Registered</th>'
+      + '<th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Action</th>'
+      + '</tr></thead><tbody class="divide-y divide-gray-100">';
+    users.forEach(function(u) {
+      const initial = (u.name || u.email || 'U')[0].toUpperCase();
+      html += '<tr class="hover:bg-gray-50">'
+        + '<td class="px-4 py-3"><div class="flex items-center gap-3">'
+        + '<div class="w-8 h-8 rounded-full bg-orange-400 text-white flex items-center justify-center text-sm font-bold">' + initial + '</div>'
+        + '<div><p class="font-medium text-gray-800">' + escHtml(u.name || '—') + '</p><p class="text-xs text-gray-400">' + escHtml(u.email || '') + '</p></div>'
+        + '</div></td>'
+        + '<td class="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">' + fmtDate(u.created_at) + '</td>'
+        + '<td class="px-4 py-3"><div class="flex gap-2 justify-end">'
+        + '<button onclick="BeDrive.settingsApproveUser(\''+u.id+'\',\''+escHtml(u.name||u.email)+'\')" class="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-green-700"><i class="fas fa-check"></i> Approve</button>'
+        + '<button onclick="BeDrive.settingsRejectUser(\''+u.id+'\',\''+escHtml(u.name||u.email)+'\')" class="flex items-center gap-1.5 bg-red-100 text-red-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-red-200"><i class="fas fa-times"></i> Reject</button>'
+        + '</div></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    html += '<p class="text-xs text-gray-400 mt-2 text-right">' + users.length + ' pending user(s)</p>';
+    wrap.innerHTML = html;
+  } catch(_e) {
+    wrap.innerHTML = '<p class="text-red-500 text-sm p-4">Failed to load pending users</p>';
+  }
+}
+
+async function settingsApproveUser(userId, userName) {
+  if (!confirm('Approve "' + userName + '"? They will be able to log in immediately.')) return;
+  try {
+    const res  = await fetch('/api/settings/users/' + userId + '/approve', { method: 'POST', headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || 'Failed to approve user', 'error'); return; }
+    toast(userName + ' approved!', 'success');
+    fetchPendingUsers();
+    loadPendingCount();
+    refreshNotifBadge();
+  } catch(_e) { toast('Network error', 'error'); }
+}
+
+async function settingsRejectUser(userId, userName) {
+  if (!confirm('Reject and delete "' + userName + '"? This cannot be undone.')) return;
+  try {
+    const res  = await fetch('/api/settings/users/' + userId + '/reject', { method: 'POST', headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || 'Failed to reject user', 'error'); return; }
+    toast(userName + ' rejected and removed', 'success');
+    fetchPendingUsers();
+    loadPendingCount();
+  } catch(_e) { toast('Network error', 'error'); }
+}
+
+async function settingsToggle(key, value) {
+  try {
+    const body = {};
+    body[key] = value;
+    const res  = await fetch('/api/settings/app-settings', { method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || 'Failed to update setting', 'error'); return; }
+    const label = key === 'signup_enabled' ? 'Sign Up' : 'Admin Approval';
+    toast(label + ' ' + (value ? 'enabled' : 'disabled'), 'success');
+  } catch(_e) { toast('Network error', 'error'); }
 }
 
 function settingsSearchUsers(val) {
@@ -1224,6 +1373,149 @@ function showSettingsMsg(el, html, type) {
   el.classList.remove('hidden');
 }
 
+// ─── Notification System ─────────────────────────────────
+function toggleNotifPanel() {
+  state.notifOpen = !state.notifOpen;
+  const panel = document.getElementById('notif-panel');
+  if (!panel) return;
+  if (state.notifOpen) {
+    panel.classList.remove('hidden');
+    fetchNotifications();
+    // Close when clicking outside
+    setTimeout(function() {
+      document.addEventListener('click', closeNotifOnOutside, { once: true });
+    }, 10);
+  } else {
+    panel.classList.add('hidden');
+  }
+}
+
+function closeNotifOnOutside(e) {
+  const wrapper = document.getElementById('notif-wrapper');
+  if (wrapper && !wrapper.contains(e.target)) {
+    state.notifOpen = false;
+    const panel = document.getElementById('notif-panel');
+    if (panel) panel.classList.add('hidden');
+  } else if (state.notifOpen) {
+    // re-attach if click was inside
+    setTimeout(function() {
+      document.addEventListener('click', closeNotifOnOutside, { once: true });
+    }, 10);
+  }
+}
+
+async function fetchNotifications() {
+  const list = document.getElementById('notif-list');
+  if (!list) return;
+  // Only admins get notifications
+  if (!state.user || state.user.role !== 'admin') {
+    list.innerHTML = '<div class="p-6 text-center text-gray-400 text-sm">Notifications are for admins only</div>';
+    return;
+  }
+  try {
+    const res  = await fetch('/api/notifications?limit=20', { headers: authHeaders() });
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    state.notifList   = data.notifications || [];
+    state.notifUnread = data.unread_count  || 0;
+    renderNotifBadge();
+    renderNotifList(list);
+  } catch(_e) {
+    if (list) list.innerHTML = '<div class="p-6 text-center text-gray-400 text-sm">Failed to load notifications</div>';
+  }
+}
+
+async function refreshNotifBadge() {
+  if (!state.user || state.user.role !== 'admin') return;
+  try {
+    const res  = await fetch('/api/notifications?limit=1&unread=true', { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.notifUnread = data.unread_count || 0;
+    renderNotifBadge();
+  } catch(_e) {}
+}
+
+function renderNotifBadge() {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  if (state.notifUnread > 0) {
+    badge.textContent = state.notifUnread > 99 ? '99+' : String(state.notifUnread);
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function renderNotifList(list) {
+  if (!list) return;
+  if (!state.notifList.length) {
+    list.innerHTML = '<div class="p-8 text-center"><i class="fas fa-bell-slash text-3xl text-gray-300 mb-3"></i><p class="text-gray-400 text-sm">No notifications yet</p></div>';
+    return;
+  }
+  const icons = { register: 'fa-user-plus text-blue-500', upload: 'fa-upload text-green-500',
+    login: 'fa-sign-in-alt text-indigo-500', share: 'fa-share-alt text-purple-500',
+    delete: 'fa-trash text-red-500', approve: 'fa-check-circle text-green-600', default: 'fa-bell text-gray-400' };
+  let html = '';
+  state.notifList.forEach(function(n) {
+    const ico   = icons[n.type] || icons.default;
+    const unread = !n.is_read;
+    const ago   = timeAgo(n.created_at);
+    html += '<div class="flex gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-50 transition-colors ' + (unread ? 'bg-blue-50/40' : '') + '" onclick="BeDrive.markNotifRead(\''+n.id+'\')" data-notif-id="'+n.id+'">'
+      + '<div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 mt-0.5"><i class="fas '+ico+' text-sm"></i></div>'
+      + '<div class="flex-1 min-w-0">'
+      + '<p class="text-sm font-medium text-gray-800 leading-snug">' + escHtml(n.title) + (unread ? ' <span class="inline-block w-2 h-2 bg-blue-500 rounded-full ml-1 align-middle"></span>' : '') + '</p>'
+      + '<p class="text-xs text-gray-400 mt-0.5 leading-snug line-clamp-2">' + escHtml(n.message) + '</p>'
+      + '<p class="text-xs text-gray-300 mt-1">' + ago + '</p>'
+      + '</div></div>';
+  });
+  list.innerHTML = html;
+}
+
+async function markNotifRead(id) {
+  // Mark single notification read
+  const el = document.querySelector('[data-notif-id="'+id+'"]');
+  if (el) el.classList.remove('bg-blue-50/40');
+  try {
+    await fetch('/api/notifications/' + id + '/read', { method: 'PATCH', headers: authHeaders() });
+    const n = state.notifList.find(function(x) { return x.id === id; });
+    if (n && !n.is_read) {
+      n.is_read = true;
+      state.notifUnread = Math.max(0, state.notifUnread - 1);
+      renderNotifBadge();
+    }
+  } catch(_e) {}
+}
+
+async function markAllNotifsRead() {
+  try {
+    await fetch('/api/notifications/read-all', { method: 'POST', headers: authHeaders() });
+    state.notifList.forEach(function(n) { n.is_read = true; });
+    state.notifUnread = 0;
+    renderNotifBadge();
+    const list = document.getElementById('notif-list');
+    renderNotifList(list);
+    toast('All notifications marked as read', 'success');
+  } catch(_e) { toast('Failed to mark read', 'error'); }
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400)return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function startNotifPolling() {
+  if (!state.user || state.user.role !== 'admin') return;
+  refreshNotifBadge();
+  // Poll every 30 seconds
+  if (state.notifInterval) clearInterval(state.notifInterval);
+  state.notifInterval = setInterval(refreshNotifBadge, 30000);
+}
+
 // ─── View toggle ──────────────────────────────────────────
 function setView(v) {
   state.view = v;
@@ -1293,6 +1585,11 @@ window.BeDrive = {
   ctxFile, ctxFolder,
   logout,
   getPage,
+  // Notifications
+  toggleNotifPanel,
+  markNotifRead,
+  markAllNotifsRead,
+  refreshNotifBadge,
   // Settings
   loadSettings,
   settingsTab: settingsTabSwitch,
@@ -1303,10 +1600,22 @@ window.BeDrive = {
   settingsDeleteUser,
   settingsSaveConfig,
   settingsChangeMyPassword,
+  settingsApproveUser,
+  settingsRejectUser,
+  settingsToggle,
   closeUserModal,
 };
 
 // ─── Auto-init ────────────────────────────────────────────
+// Close notification panel when pressing Escape
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && state.notifOpen) {
+    state.notifOpen = false;
+    const panel = document.getElementById('notif-panel');
+    if (panel) panel.classList.add('hidden');
+  }
+});
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
