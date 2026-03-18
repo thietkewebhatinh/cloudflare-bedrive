@@ -122,13 +122,14 @@ function navigate(page, folderId) {
       else { state.currentFolder = folderId; }
     }
     loadFiles();
-  } else if (page === 'shared')    loadShared();
-  else if (page === 'recent')      loadRecent();
-  else if (page === 'starred')     loadStarred();
-  else if (page === 'trash')       loadTrash();
-  else if (page === 'analytics')   loadAnalytics();
-  else if (page === 'admin-users') loadAdminUsers();
-  else if (page === 'admin-logs')  loadAdminLogs();
+  } else if (page === 'shared')       loadShared();
+  else if (page === 'recent')         loadRecent();
+  else if (page === 'starred')        loadStarred();
+  else if (page === 'trash')          loadTrash();
+  else if (page === 'analytics')      loadAnalytics();
+  else if (page === 'settings')       loadSettings();
+  else if (page === 'admin-users')    loadAdminUsers();
+  else if (page === 'admin-logs')     loadAdminLogs();
 }
 
 // ─── Load files ───────────────────────────────────────────
@@ -816,28 +817,10 @@ function statCard(label, value) {
   return '<div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"><p class="text-xs text-gray-500 mb-1">' + label + '</p><div class="flex items-baseline gap-2"><span class="text-2xl font-bold text-gray-800">' + value + '</span><span class="text-xs text-green-600 flex items-center gap-0.5"><i class="fas fa-arrow-up text-xs"></i>100%</span></div></div>';
 }
 
-// ─── Admin Users ──────────────────────────────────────────
+// ─── Admin Users (old simple view - kept for nav-admin-users) ──
 async function loadAdminUsers() {
-  showLoading();
-  try {
-    const res  = await fetch('/api/admin/users', { headers: authHeaders() });
-    if (!res.ok) { showError('Admin access required'); return; }
-    const data = await res.json();
-    const users = data.users || [];
-    let html = '<div class="flex items-center justify-between mb-4"><h2 class="text-xl font-semibold text-gray-800">Users (' + (data.total || 0) + ')</h2></div>';
-    html += '<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm"><table class="w-full text-sm">';
-    html += '<thead class="bg-gray-50 border-b"><tr><th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">User</th><th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Storage</th><th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Role</th><th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase hidden md:table-cell">Joined</th></tr></thead>';
-    html += '<tbody class="divide-y divide-gray-100">';
-    users.forEach(function(u) {
-      const pct = u.quota ? Math.min(100, Math.round((u.used_space || 0) / u.quota * 100)) : 0;
-      html += '<tr class="hover:bg-gray-50"><td class="px-4 py-3"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">' + ((u.name || u.email || 'U')[0].toUpperCase()) + '</div><div><p class="font-medium text-gray-800">' + escHtml(u.name || '—') + '</p><p class="text-xs text-gray-400">' + escHtml(u.email || '') + '</p></div></div></td>'
-        + '<td class="px-4 py-3 hidden md:table-cell"><div><div class="text-xs text-gray-500 mb-1">' + fmtSize(u.used_space || 0) + ' / ' + fmtSize(u.quota || 0) + '</div><div class="h-1.5 bg-gray-200 rounded-full overflow-hidden w-32"><div class="h-full bg-blue-500 rounded-full" style="width:' + pct + '%"></div></div></div></td>'
-        + '<td class="px-4 py-3 hidden md:table-cell"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + (u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700') + '">' + (u.role || 'user') + '</span></td>'
-        + '<td class="px-4 py-3 text-gray-400 hidden md:table-cell">' + fmtDate(u.created_at) + '</td></tr>';
-    });
-    html += '</tbody></table></div>';
-    document.getElementById('page-content').innerHTML = html;
-  } catch(e) { showError('Failed to load users'); }
+  // Redirect to full settings → users tab
+  loadSettings('users');
 }
 
 async function loadAdminLogs() {
@@ -859,6 +842,386 @@ async function loadAdminLogs() {
     html += '</tbody></table></div>';
     document.getElementById('page-content').innerHTML = html;
   } catch(e) { showError('Failed to load logs'); }
+}
+
+// ─── Settings Page ───────────────────────────────────────
+// state for settings
+state.settingsTab = 'users';
+state.settingsUsers = [];
+state.settingsPage  = 1;
+state.settingsSearch = '';
+
+async function loadSettings(tab) {
+  state.currentPage = 'settings';
+  state.settingsTab = tab || state.settingsTab || 'users';
+  showLoading();
+  const pc = document.getElementById('page-content');
+
+  // Outer layout: left tabs + right panel
+  pc.innerHTML = `
+  <div class="flex gap-0 min-h-[600px]">
+    <!-- Tab sidebar -->
+    <div class="w-48 flex-shrink-0 bg-white border border-gray-200 rounded-l-xl overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100">
+        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Settings</p>
+      </div>
+      <nav class="py-2">
+        <div id="stab-users"    class="settings-tab nav-item ${state.settingsTab==='users'    ? 'active':''}" onclick="BeDrive.settingsTab('users')"><i class="fas fa-users text-blue-400"></i> Users</div>
+        <div id="stab-new-user" class="settings-tab nav-item ${state.settingsTab==='new-user' ? 'active':''}" onclick="BeDrive.settingsTab('new-user')"><i class="fas fa-user-plus text-green-500"></i> Add User</div>
+        <div id="stab-config"   class="settings-tab nav-item ${state.settingsTab==='config'   ? 'active':''}" onclick="BeDrive.settingsTab('config')"><i class="fas fa-plug text-purple-500"></i> Connection</div>
+        <div id="stab-mypass"   class="settings-tab nav-item ${state.settingsTab==='mypass'   ? 'active':''}" onclick="BeDrive.settingsTab('mypass')"><i class="fas fa-key text-yellow-500"></i> My Password</div>
+      </nav>
+    </div>
+    <!-- Content panel -->
+    <div id="settings-panel" class="flex-1 bg-white border border-gray-200 border-l-0 rounded-r-xl p-6 overflow-auto"></div>
+  </div>`;
+
+  renderSettingsTab(state.settingsTab);
+}
+
+function settingsTabSwitch(tab) {
+  state.settingsTab = tab;
+  document.querySelectorAll('.settings-tab').forEach(function(el) { el.classList.remove('active'); });
+  const active = document.getElementById('stab-' + tab);
+  if (active) active.classList.add('active');
+  renderSettingsTab(tab);
+}
+
+async function renderSettingsTab(tab) {
+  const panel = document.getElementById('settings-panel');
+  if (!panel) return;
+
+  if (tab === 'users') {
+    panel.innerHTML = '<div class="flex items-center justify-between mb-4">'
+      + '<h2 class="text-lg font-semibold text-gray-800">User Management</h2>'
+      + '<div class="flex gap-2">'
+      + '<div class="relative"><i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none"></i>'
+      + '<input id="settings-search" type="text" placeholder="Search users…" value="' + escHtml(state.settingsSearch) + '"'
+      + ' class="pl-8 pr-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"'
+      + ' oninput="BeDrive.settingsSearchUsers(this.value)"></div>'
+      + '<button onclick="BeDrive.settingsTab(\'new-user\')" class="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-blue-700"><i class="fas fa-plus"></i> Add User</button>'
+      + '</div></div>'
+      + '<div id="users-table-wrap"><div class="text-center py-10"><i class="fas fa-spinner fa-spin text-blue-500 text-2xl"></i></div></div>';
+    await fetchSettingsUsers();
+    return;
+  }
+
+  if (tab === 'new-user') {
+    panel.innerHTML = '<h2 class="text-lg font-semibold text-gray-800 mb-5">Create New User</h2>'
+      + '<div class="max-w-lg space-y-4">'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>'
+      + '<input id="nu-name" type="text" placeholder="John Doe" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>'
+      + '<input id="nu-email" type="email" placeholder="user@example.com" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Password <span class="text-red-500">*</span></label>'
+      + '<input id="nu-password" type="password" placeholder="Min 6 characters" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Role</label>'
+      + '<select id="nu-role" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">'
+      + '<option value="user">User</option><option value="admin">Admin</option></select></div>'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Storage Quota (GB)</label>'
+      + '<input id="nu-quota" type="number" value="5" min="1" max="1000" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div id="nu-msg" class="hidden"></div>'
+      + '<div class="flex gap-3 pt-2">'
+      + '<button onclick="BeDrive.settingsTab(\'users\')" class="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50">Cancel</button>'
+      + '<button onclick="BeDrive.settingsCreateUser()" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"><i class="fas fa-user-plus"></i> Create User</button>'
+      + '</div></div>';
+    return;
+  }
+
+  if (tab === 'config') {
+    panel.innerHTML = '<h2 class="text-lg font-semibold text-gray-800 mb-5">Connection Configuration</h2>'
+      + '<div id="config-loading" class="text-center py-10"><i class="fas fa-spinner fa-spin text-blue-500 text-2xl"></i></div>'
+      + '<div id="config-form" class="hidden max-w-lg space-y-4"></div>';
+    try {
+      const res  = await fetch('/api/settings/config', { headers: authHeaders() });
+      const data = await res.json();
+      document.getElementById('config-loading').classList.add('hidden');
+      const form = document.getElementById('config-form');
+      form.classList.remove('hidden');
+      form.innerHTML = configField('Supabase URL', 'cfg-url', 'https://xxx.supabase.co', data.supabase_url || '', 'text', 'URL of your Supabase project')
+        + configField('CDN URL', 'cfg-cdn', 'https://cdn.example.com', data.cdn_url || '', 'text', 'CDN base URL for file delivery')
+        + configField('App URL', 'cfg-app', 'https://bedrive.example.com', data.app_url || '', 'text', 'Public URL of this app')
+        + '<div class="grid grid-cols-2 gap-4">'
+        + configField('Free Quota (GB)', 'cfg-quota', '5', String(data.free_quota_gb || 5), 'number', 'Default storage per user')
+        + configField('Max File Size (MB)', 'cfg-maxfile', '100', String(data.max_file_size_mb || 100), 'number', 'Max upload size')
+        + '</div>'
+        + '<div class="bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm text-gray-500">'
+        + '<p class="font-medium text-gray-700 mb-1"><i class="fas fa-info-circle text-blue-500 mr-1"></i> Note</p>'
+        + '<p>To update Supabase keys or add a new R2 bucket, edit <code class="bg-white border border-gray-200 rounded px-1">.dev.vars</code> (dev) or Cloudflare Pages environment variables (production).</p>'
+        + '</div>'
+        + '<div class="flex gap-3 pt-2">'
+        + '<button onclick="BeDrive.settingsSaveConfig()" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"><i class="fas fa-save"></i> Save Configuration</button>'
+        + '</div>';
+    } catch(e) {
+      document.getElementById('config-loading').innerHTML = '<p class="text-red-500 text-sm">Failed to load configuration</p>';
+    }
+    return;
+  }
+
+  if (tab === 'mypass') {
+    panel.innerHTML = '<h2 class="text-lg font-semibold text-gray-800 mb-5">Change My Password</h2>'
+      + '<div class="max-w-lg space-y-4">'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">New Password <span class="text-red-500">*</span></label>'
+      + '<input id="mp-new" type="password" placeholder="Min 6 characters" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div><label class="block text-sm font-medium text-gray-700 mb-1">Confirm Password <span class="text-red-500">*</span></label>'
+      + '<input id="mp-confirm" type="password" placeholder="Repeat new password" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>'
+      + '<div id="mp-msg" class="hidden"></div>'
+      + '<button onclick="BeDrive.settingsChangeMyPassword()" class="w-full bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"><i class="fas fa-key"></i> Update Password</button>'
+      + '</div>';
+    return;
+  }
+}
+
+function configField(label, id, placeholder, value, type, hint) {
+  return '<div><label class="block text-sm font-medium text-gray-700 mb-1">' + label + '</label>'
+    + '<input id="' + id + '" type="' + type + '" placeholder="' + placeholder + '" value="' + escHtml(value) + '"'
+    + ' class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">'
+    + (hint ? '<p class="text-xs text-gray-400 mt-1">' + hint + '</p>' : '')
+    + '</div>';
+}
+
+async function fetchSettingsUsers() {
+  const wrap = document.getElementById('users-table-wrap');
+  if (!wrap) return;
+  try {
+    const params = new URLSearchParams({ page: state.settingsPage, limit: 20 });
+    if (state.settingsSearch) params.set('search', state.settingsSearch);
+    const res  = await fetch('/api/settings/users?' + params, { headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) { wrap.innerHTML = '<p class="text-red-500 text-sm p-4">' + escHtml(data.error || 'Error') + '</p>'; return; }
+    state.settingsUsers = data.users || [];
+    renderUsersTable(wrap, state.settingsUsers, data.total || 0);
+  } catch(e) {
+    wrap.innerHTML = '<p class="text-red-500 text-sm p-4">Failed to load users</p>';
+  }
+}
+
+function renderUsersTable(wrap, users, total) {
+  if (!users.length) {
+    wrap.innerHTML = '<div class="text-center py-12"><i class="fas fa-users text-4xl text-gray-300 mb-3"></i><p class="text-gray-400">No users found</p></div>';
+    return;
+  }
+  let html = '<div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">'
+    + '<table class="w-full text-sm">'
+    + '<thead class="bg-gray-50 border-b border-gray-200"><tr>'
+    + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>'
+    + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>'
+    + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Storage</th>'
+    + '<th class="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Joined</th>'
+    + '<th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Actions</th>'
+    + '</tr></thead><tbody class="divide-y divide-gray-100">';
+
+  users.forEach(function(u) {
+    const pct      = u.quota ? Math.min(100, Math.round((u.used_space || 0) / u.quota * 100)) : 0;
+    const initial  = (u.name || u.email || 'U')[0].toUpperCase();
+    const roleCls  = u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
+    const isSelf   = state.user && u.id === state.user.id;
+    html += '<tr class="hover:bg-gray-50">'
+      + '<td class="px-4 py-3"><div class="flex items-center gap-3">'
+      + '<div class="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">' + initial + '</div>'
+      + '<div class="min-w-0"><p class="font-medium text-gray-800 truncate">' + escHtml(u.name || '—') + '</p>'
+      + '<p class="text-xs text-gray-400 truncate">' + escHtml(u.email || '') + '</p></div>'
+      + (isSelf ? '<span class="ml-1 text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">You</span>' : '')
+      + '</div></td>'
+      + '<td class="px-4 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + roleCls + '">' + (u.role || 'user') + '</span></td>'
+      + '<td class="px-4 py-3 hidden md:table-cell">'
+      + '<div class="text-xs text-gray-500 mb-1">' + fmtSize(u.used_space || 0) + ' / ' + fmtSize(u.quota || 0) + '</div>'
+      + '<div class="h-1.5 bg-gray-200 rounded-full overflow-hidden w-28"><div class="h-full bg-blue-500 rounded-full" style="width:' + pct + '%"></div></div>'
+      + '</td>'
+      + '<td class="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">' + fmtDate(u.created_at) + '</td>'
+      + '<td class="px-4 py-3">'
+      + '<div class="flex gap-1 justify-end">'
+      + '<button onclick="BeDrive.settingsEditUser(\'' + u.id + '\')" title="Edit" class="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"><i class="fas fa-edit text-sm"></i></button>'
+      + '<button onclick="BeDrive.settingsChangePassword(\'' + u.id + '\',\'' + escHtml(u.name || u.email) + '\')" title="Change Password" class="p-1.5 rounded-lg text-yellow-600 hover:bg-yellow-50 transition-colors"><i class="fas fa-key text-sm"></i></button>'
+      + (isSelf ? '' : '<button onclick="BeDrive.settingsDeleteUser(\'' + u.id + '\',\'' + escHtml(u.name || u.email) + '\')" title="Delete" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors"><i class="fas fa-trash text-sm"></i></button>')
+      + '</div>'
+      + '</td></tr>';
+  });
+
+  html += '</tbody></table></div>';
+  html += '<p class="text-xs text-gray-400 mt-2 text-right">' + total + ' user(s) total</p>';
+  wrap.innerHTML = html;
+}
+
+function settingsSearchUsers(val) {
+  state.settingsSearch = val;
+  state.settingsPage   = 1;
+  clearTimeout(state.searchTimeout);
+  state.searchTimeout  = setTimeout(fetchSettingsUsers, 400);
+}
+
+async function settingsCreateUser() {
+  const email    = (document.getElementById('nu-email') || {}).value || '';
+  const password = (document.getElementById('nu-password') || {}).value || '';
+  const name     = (document.getElementById('nu-name') || {}).value || '';
+  const role     = (document.getElementById('nu-role') || {}).value || 'user';
+  const quotaGB  = parseFloat((document.getElementById('nu-quota') || {}).value || '5');
+  const msgEl    = document.getElementById('nu-msg');
+
+  if (!email || !password) { showSettingsMsg(msgEl, 'Email and password are required', 'error'); return; }
+  if (password.length < 6) { showSettingsMsg(msgEl, 'Password must be at least 6 characters', 'error'); return; }
+
+  showSettingsMsg(msgEl, '<i class="fas fa-spinner fa-spin mr-1"></i> Creating user…', 'info');
+
+  try {
+    const res  = await fetch('/api/settings/users', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ email, password, name, role, quota: Math.round(quotaGB * 1073741824) })
+    });
+    const data = await res.json();
+    if (!res.ok) { showSettingsMsg(msgEl, data.error || 'Failed to create user', 'error'); return; }
+    showSettingsMsg(msgEl, '<i class="fas fa-check mr-1"></i> User created successfully!', 'success');
+    setTimeout(function() { settingsTabSwitch('users'); }, 1200);
+  } catch(e) {
+    showSettingsMsg(msgEl, 'Network error', 'error');
+  }
+}
+
+async function settingsEditUser(userId) {
+  const u = state.settingsUsers.find(function(x) { return x.id === userId; });
+  if (!u) return;
+
+  // Build edit modal
+  showUserModal(
+    'Edit User: ' + escHtml(u.name || u.email),
+    `<div class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+      <input id="eu-name" type="text" value="${escHtml(u.name||'')}" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+      <input id="eu-email" type="email" value="${escHtml(u.email||'')}" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+      <select id="eu-role" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="user" ${u.role==='user'?'selected':''}>User</option>
+        <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+      </select></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Storage Quota (GB)</label>
+      <input id="eu-quota" type="number" value="${Math.round((u.quota||5368709120)/1073741824)}" min="1" max="1000" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>
+      <div id="eu-msg" class="hidden"></div>
+    </div>`,
+    function() {
+      const name    = document.getElementById('eu-name').value.trim();
+      const email   = document.getElementById('eu-email').value.trim();
+      const role    = document.getElementById('eu-role').value;
+      const quotaGB = parseFloat(document.getElementById('eu-quota').value || '5');
+      const msgEl   = document.getElementById('eu-msg');
+
+      showSettingsMsg(msgEl, '<i class="fas fa-spinner fa-spin mr-1"></i> Saving…', 'info');
+
+      fetch('/api/settings/users/' + userId, {
+        method: 'PATCH', headers: authHeaders(),
+        body: JSON.stringify({ name, email, role, quota: Math.round(quotaGB * 1073741824) })
+      }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d }; }); })
+      .then(function({ ok, d }) {
+        if (!ok) { showSettingsMsg(msgEl, d.error || 'Failed', 'error'); return; }
+        toast('User updated successfully', 'success');
+        closeUserModal();
+        fetchSettingsUsers();
+      }).catch(function() { showSettingsMsg(msgEl, 'Network error', 'error'); });
+    }
+  );
+}
+
+function settingsChangePassword(userId, userName) {
+  showUserModal(
+    'Change Password: ' + escHtml(userName),
+    `<div class="space-y-4">
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">New Password <span class="text-red-500">*</span></label>
+      <input id="cp-new" type="password" placeholder="Min 6 characters" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+      <input id="cp-confirm" type="password" placeholder="Repeat new password" class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></div>
+      <div id="cp-msg" class="hidden"></div>
+    </div>`,
+    function() {
+      const pw  = document.getElementById('cp-new').value;
+      const pw2 = document.getElementById('cp-confirm').value;
+      const msg = document.getElementById('cp-msg');
+      if (!pw || pw.length < 6) { showSettingsMsg(msg, 'Password must be at least 6 characters', 'error'); return; }
+      if (pw !== pw2)             { showSettingsMsg(msg, 'Passwords do not match', 'error'); return; }
+      showSettingsMsg(msg, '<i class="fas fa-spinner fa-spin mr-1"></i> Updating…', 'info');
+      fetch('/api/settings/users/' + userId + '/password', {
+        method: 'POST', headers: authHeaders(), body: JSON.stringify({ password: pw })
+      }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d }; }); })
+      .then(function({ ok, d }) {
+        if (!ok) { showSettingsMsg(msg, d.error || 'Failed', 'error'); return; }
+        toast('Password updated', 'success'); closeUserModal();
+      }).catch(function() { showSettingsMsg(msg, 'Network error', 'error'); });
+    }
+  );
+}
+
+async function settingsDeleteUser(userId, userName) {
+  if (!confirm('Delete user "' + userName + '"? This will permanently remove their account and all their data. This cannot be undone.')) return;
+  try {
+    const res  = await fetch('/api/settings/users/' + userId, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || 'Failed to delete user', 'error'); return; }
+    toast('User deleted', 'success');
+    fetchSettingsUsers();
+  } catch(e) { toast('Network error', 'error'); }
+}
+
+async function settingsSaveConfig() {
+  const url    = (document.getElementById('cfg-url')     || {}).value || '';
+  const cdn    = (document.getElementById('cfg-cdn')     || {}).value || '';
+  const appUrl = (document.getElementById('cfg-app')     || {}).value || '';
+  toast('Configuration is managed via environment variables. Update .dev.vars (dev) or Cloudflare Pages settings (prod).', 'success');
+}
+
+async function settingsChangeMyPassword() {
+  const pw  = (document.getElementById('mp-new')     || {}).value || '';
+  const pw2 = (document.getElementById('mp-confirm') || {}).value || '';
+  const msg = document.getElementById('mp-msg');
+  if (!pw || pw.length < 6) { showSettingsMsg(msg, 'Password must be at least 6 characters', 'error'); return; }
+  if (pw !== pw2)             { showSettingsMsg(msg, 'Passwords do not match', 'error'); return; }
+  showSettingsMsg(msg, '<i class="fas fa-spinner fa-spin mr-1"></i> Updating…', 'info');
+  try {
+    const res  = await fetch('/api/settings/me/password', {
+      method: 'PATCH', headers: authHeaders(),
+      body: JSON.stringify({ new_password: pw })
+    });
+    const data = await res.json();
+    if (!res.ok) { showSettingsMsg(msg, data.error || 'Failed', 'error'); return; }
+    showSettingsMsg(msg, '<i class="fas fa-check mr-1"></i> Password updated successfully!', 'success');
+    document.getElementById('mp-new').value     = '';
+    document.getElementById('mp-confirm').value = '';
+  } catch(e) { showSettingsMsg(msg, 'Network error', 'error'); }
+}
+
+// ─── Shared modal for user edit/password ──────────────────
+function showUserModal(title, bodyHtml, onSave) {
+  closeUserModal();
+  const overlay = document.createElement('div');
+  overlay.id = 'user-modal';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+  <div class="modal" style="max-width:480px">
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="font-semibold text-gray-800 text-base">${title}</h3>
+      <button onclick="BeDrive.closeUserModal()" class="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="user-modal-body">${bodyHtml}</div>
+    <div class="flex gap-3 mt-5">
+      <button onclick="BeDrive.closeUserModal()" class="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50">Cancel</button>
+      <button id="user-modal-save" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"><i class="fas fa-save"></i> Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('user-modal-save').onclick = onSave;
+}
+
+function closeUserModal() {
+  const m = document.getElementById('user-modal');
+  if (m) m.remove();
+}
+
+function showSettingsMsg(el, html, type) {
+  if (!el) return;
+  const cls = type === 'error'   ? 'bg-red-50 border border-red-200 text-red-700'
+            : type === 'success' ? 'bg-green-50 border border-green-200 text-green-700'
+            :                      'bg-blue-50 border border-blue-200 text-blue-700';
+  el.className = cls + ' px-4 py-2.5 rounded-xl text-sm';
+  el.innerHTML = html;
+  el.classList.remove('hidden');
 }
 
 // ─── View toggle ──────────────────────────────────────────
@@ -930,6 +1293,17 @@ window.BeDrive = {
   ctxFile, ctxFolder,
   logout,
   getPage,
+  // Settings
+  loadSettings,
+  settingsTab: settingsTabSwitch,
+  settingsSearchUsers,
+  settingsCreateUser,
+  settingsEditUser,
+  settingsChangePassword,
+  settingsDeleteUser,
+  settingsSaveConfig,
+  settingsChangeMyPassword,
+  closeUserModal,
 };
 
 // ─── Auto-init ────────────────────────────────────────────

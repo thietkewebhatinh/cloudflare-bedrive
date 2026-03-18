@@ -1,6 +1,6 @@
 // Auth middleware - verifies JWT from Supabase or demo mode
 import { createMiddleware } from 'hono/factory'
-import { getSupabaseClient, isDemoMode } from '../lib/supabase'
+import { getSupabaseClient, getSupabaseServiceClient, isDemoMode } from '../lib/supabase'
 
 export const DEMO_TOKEN = 'demo-token-bedrive'
 export const DEMO_USER_ID = 'demo-user-001'
@@ -64,7 +64,9 @@ export const authMiddleware = createMiddleware<Env>(async (c, next) => {
     c.set('userEmail', user.email || '')
     c.set('isDemo', false)
 
-    const { data: profile } = await supabase
+    // Use service key to bypass RLS when reading profile
+    const svc = getSupabaseServiceClient(c.env)
+    const { data: profile } = await svc
       .from('profiles')
       .select('role')
       .eq('id', user.id)

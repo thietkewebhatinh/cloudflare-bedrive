@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
-import authRoutes   from './routes/auth'
-import filesRoutes  from './routes/files'
-import foldersRoutes from './routes/folders'
-import sharesRoutes from './routes/shares'
-import adminRoutes  from './routes/admin'
-import cdnRoutes    from './routes/cdn'
+import authRoutes     from './routes/auth'
+import filesRoutes    from './routes/files'
+import foldersRoutes  from './routes/folders'
+import sharesRoutes   from './routes/shares'
+import adminRoutes    from './routes/admin'
+import cdnRoutes      from './routes/cdn'
+import settingsRoutes from './routes/settings'
 
 type Bindings = {
   SUPABASE_URL: string
@@ -28,12 +29,13 @@ app.use('/api/*', cors({
 }))
 
 // API Routes
-app.route('/api/auth',    authRoutes)
-app.route('/api/files',   filesRoutes)
-app.route('/api/folders', foldersRoutes)
-app.route('/api/shares',  sharesRoutes)
-app.route('/api/admin',   adminRoutes)
-app.route('/r2',          cdnRoutes)
+app.route('/api/auth',     authRoutes)
+app.route('/api/files',    filesRoutes)
+app.route('/api/folders',  foldersRoutes)
+app.route('/api/shares',   sharesRoutes)
+app.route('/api/admin',    adminRoutes)
+app.route('/api/settings', settingsRoutes)
+app.route('/r2',           cdnRoutes)
 
 // Static assets
 app.use('/static/*', serveStatic({ root: './public' }))
@@ -432,6 +434,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0
       <p class="px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Admin</p>
       <div class="nav-item" id="nav-analytics" onclick="BeDrive.navigate('analytics')">
         <i class="fas fa-chart-bar"></i> Analytics
+      </div>
+      <div class="nav-item" id="nav-settings" onclick="BeDrive.navigate('settings')">
+        <i class="fas fa-cog"></i> Settings
       </div>
       <div class="nav-item" id="nav-admin-users" onclick="BeDrive.navigate('admin-users')">
         <i class="fas fa-users"></i> Users

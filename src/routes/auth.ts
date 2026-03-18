@@ -1,6 +1,6 @@
 // Auth routes - login, register, logout, user profile
 import { Hono } from 'hono'
-import { getSupabaseClient, isDemoMode } from '../lib/supabase'
+import { getSupabaseClient, getSupabaseServiceClient, getSupabaseUserClient, isDemoMode } from '../lib/supabase'
 import { DEMO_TOKEN, DEMO_USER_ID, DEMO_USER_EMAIL } from '../middleware/auth'
 
 type Bindings = {
@@ -141,13 +141,15 @@ auth.get('/me', async (c) => {
       return c.json({ error: 'Invalid token' }, 401)
     }
 
-    const { data: profile } = await supabase
+    // Use service key to fetch profile (bypass RLS)
+    const svc = getSupabaseServiceClient(c.env)
+    const { data: profile } = await svc
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .single()
 
-    return c.json({ user: profile || { id: user.id, email: user.email } })
+    return c.json({ user: profile || { id: user.id, email: user.email, role: 'user' } })
   } catch (e) {
     return c.json({ error: 'Auth service unavailable' }, 503)
   }
